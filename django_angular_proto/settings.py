@@ -112,6 +112,8 @@ USE_I18N = True
 
 USE_TZ = True
 
+RUN_SERVER_PORT = 8080
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
