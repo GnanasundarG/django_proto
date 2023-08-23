@@ -112,7 +112,7 @@ USE_I18N = True
 
 USE_TZ = True
 
-RUN_SERVER_PORT = 8080
+RUN_SERVER_PORT = 80
 
 
 # Static files (CSS, JavaScript, Images)
