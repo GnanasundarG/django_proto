@@ -121,7 +121,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = '/angular/'
+STATIC_URL = 'angular/'
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'angular'),  # Path to your Angular build output
 ]
