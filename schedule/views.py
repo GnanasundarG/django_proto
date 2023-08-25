@@ -8,7 +8,9 @@ from django.utils import timezone
 from django.db import connection
 from collections import defaultdict
 from datetime import timedelta, datetime
+import jwt
 
+from django.conf import settings
 from login.response_utils import generate_error_response, manual_error_response
 from rest_framework.decorators import api_view
 from schedule.helper_functions import build_hour_wise_query, convert_to_time_format, count_flights_by_hour, map_excel_data_to_model, calculate_date_between_range, generate_week_intervals
@@ -2414,7 +2416,6 @@ def getAircraftsList(request):
 
         return JsonResponse(response_data)
 
-
 def aircraftBasedOvernightParkingCount(request):
     current_date = timezone.now().date()
 
@@ -2550,6 +2551,80 @@ def aircraftBasedOvernightParkingCount(request):
 
     return JsonResponse(response_data)
 
+@api_view(['GET'])
+def getStationsList(request):
+    if request.method == 'GET':
+        station_type = request.GET.get('station_type', '').lower()
+
+        try:
+            # Get the JWT token from the authorization header
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            _, jwt_token = auth_header.split('Bearer ')
+
+            # Decode the JWT token
+            user_payload = jwt.decode(jwt_token, settings.SECRET_KEY, algorithms=["HS256"])
+            user_station = user_payload["station_id"]
+            user_country = user_payload["country"]  # Add this line to get user's country
+
+           
+
+            query = """
+SELECT DISTINCT s.station_name, s.station_code, s.station_logo,
+    CASE
+        WHEN s.country::text = %s THEN 'domestic'
+        ELSE 'international'
+    END AS computed_station_type
+ FROM stations s
+        WHERE 
+            (s.country::text = %s AND %s = 'domestic' AND EXISTS (
+                SELECT 1
+                FROM schedules origin_s
+                WHERE s.id_station = origin_s.origin_station_id
+                OR s.id_station = origin_s.destination_station_id
+            ))
+            OR
+            (s.country::text != %s AND  %s = 'international'  AND EXISTS (
+                SELECT 1
+                FROM schedules origin_s
+                WHERE s.id_station = origin_s.origin_station_id
+                OR s.id_station = origin_s.destination_station_id
+            ))
+        """
+
+           # Execute the query
+            with connection.cursor() as cursor:
+               cursor.execute(query, [user_country,  user_country, station_type,user_country, station_type])
+
+               result = cursor.fetchall()
+
+
+
+            # Transform the raw result into desired response structure
+            response_data = {
+                'success': True,
+                'respayload': [],
+                'message': f'{station_type} stations data is fetched successfully',
+            }
+
+            for row in result:
+                station_name, station_code, station_logo, computed_station_type = row
+                station_info = {
+                    'station_name': station_name,
+                    'station_code': station_code,
+                    'station_logo': station_logo,
+                    'station_type': computed_station_type,
+                }
+                response_data['respayload'].append(station_info)
+
+            return JsonResponse(response_data)
+        
+        except jwt.ExpiredSignatureError:
+            return manual_error_response(401, "Token has expired", "")
+        
+        except jwt.DecodeError:
+            return manual_error_response(401, "Invalid token", "")
+
+        
 
 
 @api_view(['GET'])
@@ -2861,3 +2936,158 @@ ORDER BY
             }
         }
     return JsonResponse(response_data, safe=False)
+
+
+
+@api_view(['GET'])
+def paxhandling_deomestic_international_report(request):
+    date = request.GET.get('date', None)
+    filterby = request.GET.get('filter_by', None)
+    format_string = '%Y-%m-%d'
+    # calculating dates for getting the schedule date 
+    if not date:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT MIN(valid_from) FROM schedules;")
+            result = cursor.fetchone()
+            min_date = result[0].strftime(format_string) if result[0] else date.today().strftime(format_string)
+            date = min_date
+    elif date:
+        date = date
+    
+    hour_wise_query = """
+    SELECT
+    schedule_type AS route_type,
+    json_agg(json_build_object(
+        'date', hour_interval,
+        'count', schedule_count
+    )) AS dates
+    FROM (
+        SELECT
+            CASE
+                WHEN st.country = 'India' THEN 'Domestic'
+                ELSE 'International'
+            END AS schedule_type,
+        CASE
+            WHEN (arrival_time >= '0000' AND arrival_time <= '0059') OR
+                (departure_time >= '0000' AND departure_time <= '0059') THEN '00:00 - 01:00'
+            WHEN (arrival_time >= '0100' AND arrival_time <= '0159') OR
+                (departure_time >= '0100' AND departure_time <= '0159') THEN '01:00 - 02:00'
+            WHEN (arrival_time >= '0200' AND arrival_time <= '0259') OR
+                (departure_time >= '0200' AND departure_time <= '0259') THEN '02:00 - 03:00'
+            WHEN (arrival_time >= '0300' AND arrival_time <= '0359') OR
+                (departure_time >= '0300' AND departure_time <= '0359') THEN '03:00 - 04:00'
+            WHEN (arrival_time >= '0400' AND arrival_time <= '0459') OR
+                (departure_time >= '0400' AND departure_time <= '0459') THEN '04:0.0 - 05:00'
+            WHEN (arrival_time >= '0500' AND arrival_time <= '0559') OR
+                (departure_time >= '0500' AND departure_time <= '0559') THEN '05:00 - 06:00'
+            WHEN (arrival_time >= '0600' AND arrival_time <= '0659') OR
+                (departure_time >= '0600' AND departure_time <= '0659') THEN '06:00 - 07:00'
+            WHEN (arrival_time >= '0700' AND arrival_time <= '0759') OR
+                (departure_time >= '0700' AND departure_time <= '0759') THEN '07:00 - 08:00'
+            WHEN (arrival_time >= '0800' AND arrival_time <= '0859') OR
+                (departure_time >= '0800' AND departure_time <= '0859') THEN '08:00 - 09:00'
+            WHEN (arrival_time >= '0900' AND arrival_time <= '0959') OR
+                (departure_time >= '0900' AND departure_time <= '0959') THEN '09:00 - 10:00'
+            WHEN (arrival_time >= '1000' AND arrival_time <= '1059') OR
+                (departure_time >= '1000' AND departure_time <= '1059') THEN '10:00 - 11:00'
+            WHEN (arrival_time >= '1100' AND arrival_time <= '1159') OR
+                (departure_time >= '1100' AND departure_time <= '1159') THEN '11:00 - 12:00'
+            WHEN (arrival_time >= '1200' AND arrival_time <= '1259') OR
+                (departure_time >= '1200' AND departure_time <= '1259') THEN '12:00 - 13:00'
+            WHEN (arrival_time >= '1300' AND arrival_time <= '1359') OR
+                (departure_time >= '1300' AND departure_time <= '1359') THEN '13:00 - 14:00'
+            WHEN (arrival_time >= '1400' AND arrival_time <= '1459') OR
+                (departure_time >= '1400' AND departure_time <= '1459') THEN '14:00 - 15:00'
+            WHEN (arrival_time >= '1500' AND arrival_time <= '1559') OR
+                (departure_time >= '1500' AND departure_time <= '1559') THEN '15:00 - 16:00'
+            WHEN (arrival_time >= '1600' AND arrival_time <= '1659') OR
+                (departure_time >= '1600' AND departure_time <= '1659') THEN '16:00 - 17:00'
+            WHEN (arrival_time >= '1700' AND arrival_time <= '1759') OR
+                (departure_time >= '1700' AND departure_time <= '1759') THEN '17:00 - 18:00'
+            WHEN (arrival_time >= '1800' AND arrival_time <= '1859') OR
+                (departure_time >= '1800' AND departure_time <= '1859') THEN '18:00 - 19:00'
+            WHEN (arrival_time >= '1900' AND arrival_time <= '1959') OR
+                (departure_time >= '1900' AND departure_time <= '1959') THEN '19:00 - 20:00'
+            WHEN (arrival_time >= '2000' AND arrival_time <= '2059') OR
+                (departure_time >= '2000' AND departure_time <= '2059') THEN '20:00 - 21:00'
+            WHEN (arrival_time >= '2100' AND arrival_time <= '2159') OR
+                (departure_time >= '2100' AND departure_time <= '2159') THEN '21:00 - 22:00'
+            WHEN (arrival_time >= '2200' AND arrival_time <= '2259') OR
+                (departure_time >= '2200' AND departure_time <= '2259') THEN '22:00 - 23:00'
+            WHEN (arrival_time >= '2300' AND arrival_time <= '2359') OR
+                (departure_time >= '2300' AND departure_time <= '2359') THEN '23:00 - 24:00'
+            ELSE 'Unknown'
+            END AS hour_interval,
+        SUM(no_of_seats) AS schedule_count
+    FROM schedules s
+    JOIN stations destination_station ON destination_station_id = id_station
+    JOIN stations st ON st.id_station = destination_station_id
+    WHERE (valid_from <= %s::DATE AND valid_to >= %s::DATE)
+    GROUP BY
+        st.country,
+        schedule_type,
+        hour_interval
+    ) AS schedule_info
+        WHERE
+            CASE
+                WHEN %s = 'domestic' THEN schedule_type = 'Domestic'
+                WHEN %s = 'international' THEN schedule_type = 'International'
+                ELSE TRUE
+            END
+        GROUP BY
+            schedule_type
+        ORDER BY
+            schedule_type;
+"""
+
+    total_data = {
+        "route_type": "Total",
+        "dates": []
+    }
+    # Execute the SQL query
+    with connection.cursor() as cursor:
+        interval_type = "hour"
+        date_intervals = ['00:00 - 01:00', '01:00 - 02:00', '02:00 - 03:00', '03:00 - 04:00', '04:00 - 05:00', '05:00 - 06:00', '06:00 - 07:00', '07:00 - 08:00', '08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00', '15:00 - 16:00', '16:00 - 17:00', '17:00 - 18:00', '18:00 - 19:00', '19:00 - 20:00', '20:00 - 21:00', '21:00 - 22:00', '22:00 - 23:00', '23:00 - 24:00']
+        cursor.execute(hour_wise_query, [date, date, filterby,filterby])
+        columns = [desc[0] for desc in cursor.description]
+        result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        
+        
+    # calculate the total counts for the columns
+    def add_total_count(data, curr_date):
+        total_count = 0
+
+        for curr_airline in data:
+            curr_airline_date_range = curr_airline["dates"]
+            curr_date_count = list(filter(lambda date: date["date"] == curr_date, curr_airline_date_range))
+            if curr_date_count and len(curr_date_count) > 0:
+                total_count = total_count + curr_date_count[0]['count']
+            else:
+                total_count = total_count + 0
+
+        return total_count
+    
+    for hour in range(24):
+        total_for_that_day = add_total_count(result, str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),)
+        total_data['dates'].append({
+            "date": str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),
+            "count": total_for_that_day
+        })
+    result.append(total_data)
+
+    
+    response_data = {
+            'success': True,
+            'message': 'Data fetched successfully',                                 
+            'respayload': {
+                'airlines_data': result,
+                'date_range': date_intervals,
+                "type": interval_type,
+                "date":date
+            }
+        }
+    return JsonResponse(response_data, safe=False)
+
+
+
+

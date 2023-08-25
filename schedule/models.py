@@ -4,7 +4,7 @@ class Airlines(models.Model):
     id_airline = models.AutoField(primary_key=True)
     airline_code = models.TextField()
     airline_name = models.TextField()
-    logo_image = models.TextField()
+    logo_image = models.TextField(default='')
 
     def __str__(self):
         return self.airline_name
@@ -15,7 +15,8 @@ class Stations(models.Model):
     id_station = models.IntegerField(primary_key=True)
     station_name = models.TextField()
     station_code = models.TextField()
-
+    country=models.TextField(default='')
+    station_logo= models.TextField(default='')
     def __str__(self):
         return self.station_name
     class Meta:
@@ -25,7 +26,7 @@ class AircraftType(models.Model):
     id_aircraft_type = models.IntegerField(primary_key=True)
     aircraft_name = models.TextField()
     aircraft_code = models.TextField()
-    aircraft_logo = models.TextField()
+    aircraft_logo = models.TextField(default='')
     def __str__(self):
         return self.aircraft_name
     class Meta:

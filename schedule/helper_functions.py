@@ -45,8 +45,8 @@ def map_excel_data_to_model(excel_data_list, scheduleTypeID):
             'destination_station' :  destination_station,
             'arrival_station' :  arrival_station,
             'departure_station' :  departure_station,
-            'arrival_time' : excel_data.get('Schedule Time (Arrival)'),
-            'departure_time' : excel_data.get('Schedule Time (Departure)'),
+            'arrival_time' : format_time(excel_data.get('Schedule Time (Arrival)')),
+            'departure_time' : format_time(excel_data.get('Schedule Time (Departure)')),
             'no_of_seats' :  excel_data.get('No. of Seats'),
             'aircraft_type' :  aircraft_type,
             'overnight_parking' :  '',
@@ -139,6 +139,19 @@ def calculate_date_between_range(start_date, end_date):
         # If an error occurs, return an error response
         return e
 
+def format_time(num):
+    if num < 0 or num > 2359:
+        return 0000
+
+    hours = num // 100
+    minutes = num % 100
+
+    if hours > 23:
+        hours %= 10
+
+    formatted_num = f"{hours:02d}{minutes:02d}"
+
+    return formatted_num
 
 def convert_to_time_format(number):
     if 0 <= number < 24:
