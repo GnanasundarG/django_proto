@@ -14,6 +14,7 @@ import configparser
 from datetime import timedelta
 import os
 from pathlib import Path
+from corsheaders.defaults import default_headers
 # Read the configuration file
 config = configparser.ConfigParser()
 # Get the current directory (where the settings.py file is located)
@@ -35,7 +36,15 @@ SECRET_KEY = config.get('General', 'SECRET_KEY')
 DEBUG = config.getboolean('General', 'DEBUG')
 
 ALLOWED_HOSTS=['*']
+
+# CORS SETTING
+DEFAULT_HEADERS = list(default_headers) + [
+    'Authorization'
+]
+CORS_ALLOW_HEADERS = DEFAULT_HEADERS
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ORIGIN_ALLOW_ALL=True
+
 
 # Application definition
 
