@@ -182,10 +182,9 @@ def is_schedule_data_exist(request):
 def airline_data_api(request):
     current_date = datetime.now().date()
     current_day_of_week = current_date.isoweekday()
-
     # Extract airline names from the URL parameters
-    airline_names = request.GET.getlist('airline_name', [''])
-
+    airline_ids = request.GET.getlist('airline_id', [])
+    airlines_filter_length = len(airline_ids)
     # Extract valid_from and valid_to dates from the URL parameters
     valid_from_str = request.GET.get('valid_from')
     valid_to_str = request.GET.get('valid_to')
@@ -195,14 +194,19 @@ def airline_data_api(request):
     valid_to = datetime.strptime(valid_to_str, '%Y-%m-%d').date() if valid_to_str else current_date
 
     # Create placeholders for the airline_names to use in the SQL query
-    placeholders = ','.join(['%s'] * len(airline_names))
+    # placeholders = ','.join(['%s'] * len(airline_ids))
+    condition_query = ''
+    if(airlines_filter_length > 0):
+        condition_query = f"(a.id_airline IN ({','.join(airline_ids)})) AND EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
+    else:
+        condition_query = f"EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
 
     with connection.cursor() as cursor:
-        query = """
+        query = f"""
             SELECT
                 a.airline_name,
-                COUNT(DISTINCT CASE WHEN s_arrival.valid_from <= %s AND s_arrival.valid_to >= %s AND 
-                    CASE %s
+                COUNT(DISTINCT CASE WHEN s_arrival.valid_from <= '{valid_from}' AND s_arrival.valid_to >= '{valid_to}' AND 
+                    CASE {current_day_of_week}
                         WHEN 1 THEN s_arrival.monday_operation
                         WHEN 2 THEN s_arrival.tuesday_operation
                         WHEN 3 THEN s_arrival.wednesday_operation
@@ -212,8 +216,8 @@ def airline_data_api(request):
                         WHEN 7 THEN s_arrival.sunday_operation
                     END
                 THEN s_arrival.id_schedule END) AS arrival_count,
-                COUNT(DISTINCT CASE WHEN s_departure.valid_from <= %s AND s_departure.valid_to >= %s AND 
-                    CASE %s
+                COUNT(DISTINCT CASE WHEN s_departure.valid_from <= '{valid_from}' AND s_departure.valid_to >= '{valid_to}' AND 
+                    CASE {current_day_of_week}
                         WHEN 1 THEN s_departure.monday_operation
                         WHEN 2 THEN s_departure.tuesday_operation
                         WHEN 3 THEN s_departure.wednesday_operation
@@ -223,8 +227,8 @@ def airline_data_api(request):
                         WHEN 7 THEN s_departure.sunday_operation
                     END
                 THEN s_departure.id_schedule END) AS departure_count,
-                COUNT(DISTINCT CASE WHEN s.valid_from <= %s AND s.valid_to >= %s AND s.overnight_parking AND 
-                    CASE %s
+                COUNT(DISTINCT CASE WHEN s.valid_from <= '{valid_from}' AND s.valid_to >= '{valid_to}' AND s.overnight_parking AND 
+                    CASE {current_day_of_week}
                         WHEN 1 THEN s.monday_operation
                         WHEN 2 THEN s.tuesday_operation
                         WHEN 3 THEN s.wednesday_operation
@@ -238,20 +242,12 @@ def airline_data_api(request):
             LEFT JOIN schedules s_arrival ON a.id_airline = s_arrival.arrival_airline_id
             LEFT JOIN schedules s_departure ON a.id_airline = s_departure.departure_airline_id
             LEFT JOIN schedules s ON a.id_airline = s.arrival_airline_id OR a.id_airline = s.departure_airline_id
-            WHERE (%s = '' OR a.airline_name IN ({})) AND EXISTS (
-                SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline)
-                    AND (%s BETWEEN valid_from AND valid_to OR %s BETWEEN valid_from AND valid_to OR valid_from >= %s)
-            )
+            WHERE {condition_query}               
             GROUP BY a.airline_name
         """
 
         # Build a list of all arguments required for the query
-        args = [valid_from, valid_to, current_day_of_week, valid_from, valid_to, current_day_of_week,
-                valid_from, valid_to, current_day_of_week]
-        args.extend(airline_names)
-        args.extend([airline_names[0], valid_from, valid_to, valid_from])
-
-        cursor.execute(query.format(placeholders), args)
+        cursor.execute(query)
 
         rows = cursor.fetchall()
         airlines_data = []
