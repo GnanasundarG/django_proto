@@ -26,6 +26,16 @@ def map_excel_data_to_model(excel_data_list, scheduleTypeID):
         scheduleType = ScheduleTypes.objects.get(id_schedule_type = scheduleTypeID)
         # check day wise availability
         daysWiseActivity = set_weekday_variables(excel_data.get('Days of Operation'),)
+        # Check if "Remarks" column contains specific keywords
+        remarks = str(excel_data.get('Remarks', '')).lower().strip()  # Convert to string
+        remarks_exception=[
+            'overnight parking',
+            'next day departure'
+        ]
+        if  remarks in remarks_exception:
+            overnight_parking = True
+        else:
+            overnight_parking = False
         mapped_data = {
             'id_schedule_type': scheduleType,
             'arrival_airline' :  arrival_airline,
@@ -49,7 +59,7 @@ def map_excel_data_to_model(excel_data_list, scheduleTypeID):
             'departure_time' : format_time(excel_data.get('Schedule Time (Departure)')),
             'no_of_seats' :  excel_data.get('No. of Seats'),
             'aircraft_type' :  aircraft_type,
-            'overnight_parking' :  '',
+             'overnight_parking': overnight_parking,
             'service_type_arrival' : excel_data.get('Service Type - Arr'),
             'service_type_departure' : excel_data.get('Service Type - Dep'),
             }
