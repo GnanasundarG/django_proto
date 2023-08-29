@@ -1,0 +1,30 @@
+# Starter pipeline
+
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+name: Build and deploy Python app to Azure Web App - djangotestrun123
+
+trigger:
+- master
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+  steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up python environment
+      uses: actions/setup-python@v1
+      with:
+        python-version: '3.11'
+    
+    - name: Create and start virtual environment
+        run:|
+          python -m venv venv
+          source venv/bin/activate
+      
+    - name: Install dependencies
+      run: pip install -r requirements.txt
