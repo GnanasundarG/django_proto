@@ -27,6 +27,7 @@ class AircraftType(models.Model):
     aircraft_name = models.TextField()
     aircraft_code = models.TextField()
     aircraft_logo = models.TextField(default='')
+    aircraft_type = models.TextField(default='')
     def __str__(self):
         return self.aircraft_name
     class Meta:

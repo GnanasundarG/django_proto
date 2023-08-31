@@ -1,5 +1,6 @@
 from datetime import timedelta, timezone
 import json
+import jwt
 
 import pandas as pd
 from django.http import JsonResponse
@@ -8,6 +9,7 @@ from django.utils import timezone
 from django.db import connection
 from collections import defaultdict
 from datetime import timedelta, datetime
+from airportManagementSystemMw import settings
 import jwt
 
 from django.conf import settings
@@ -2934,8 +2936,516 @@ ORDER BY
     return JsonResponse(response_data, safe=False)
 
 
+def getStationsList(request):
+    if request.method == 'GET':
+        station_type = request.GET.get('station_type', '').lower()
+
+        try:
+            # Get the JWT token from the authorization header
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            _, jwt_token = auth_header.split('Bearer ')
+
+            # Decode the JWT token
+            user_payload = jwt.decode(jwt_token, settings.SECRET_KEY, algorithms=["HS256"])
+            user_station = user_payload["station_id"]
+            user_country = user_payload["country"]  # Add this line to get user's country
+
+           
+
+            query = """
+SELECT DISTINCT s.station_name, s.station_code, s.station_logo,
+    CASE
+        WHEN s.country::text = %s THEN 'domestic'
+        ELSE 'international'
+    END AS computed_station_type
+ FROM stations s
+        WHERE 
+            (s.country::text = %s AND %s = 'domestic' AND EXISTS (
+                SELECT 1
+                FROM schedules origin_s
+                WHERE s.id_station = origin_s.origin_station_id
+                OR s.id_station = origin_s.destination_station_id
+            ))
+            OR
+            (s.country::text != %s AND  %s = 'international'  AND EXISTS (
+                SELECT 1
+                FROM schedules origin_s
+                WHERE s.id_station = origin_s.origin_station_id
+                OR s.id_station = origin_s.destination_station_id
+            ))
+        """
+
+           # Execute the query
+            with connection.cursor() as cursor:
+               cursor.execute(query, [user_country,  user_country, station_type,user_country, station_type])
+
+               result = cursor.fetchall()
+
+
+
+            # Transform the raw result into desired response structure
+            response_data = {
+                'success': True,
+                'respayload': [],
+                'message': f'{station_type} stations data is fetched successfully',
+            }
+
+            for row in result:
+                station_name, station_code, station_logo, computed_station_type = row
+                station_info = {
+                    'station_name': station_name,
+                    'station_code': station_code,
+                    'station_logo': station_logo,
+                    'station_type': computed_station_type,
+                }
+                response_data['respayload'].append(station_info)
+
+            return JsonResponse(response_data)
+        
+        except jwt.ExpiredSignatureError:
+            return manual_error_response(401, "Token has expired", "")
+        
+        except jwt.DecodeError:
+            return manual_error_response(401, "Invalid token", "")
+
+def getAircraftTypeCount(request):
+    current_date = timezone.now().date()
+
+    valid_from = request.GET.get('valid_from')
+    valid_to = request.GET.get('valid_to')
+
+    if valid_from:
+       valid_from = datetime.strptime(valid_from, '%Y-%m-%d').date()
+    if valid_to:
+       valid_to = datetime.strptime(valid_to, '%Y-%m-%d').date()
+    else:
+        valid_from, valid_to = get_valid_date_range(current_date)
+        if valid_from and valid_to:
+            if valid_from <= current_date <= valid_to:
+                valid_from = current_date
+                valid_to = current_date
+            else:
+                earliest_date, _ = get_valid_date_range(current_date)
+                valid_from = earliest_date
+                valid_to = earliest_date
+   
+    data_type = ""
+    
+    
+    week_based_sql_query = """
+        CREATE TEMPORARY TABLE IF NOT EXISTS TempWeeklyScheduleCounts (
+            aircraft_type_id TEXT,
+            aircraft_name TEXT,
+            aircraft_type TEXT,
+            week_start DATE,
+            schedule_count INT
+        );
+
+        INSERT INTO TempWeeklyScheduleCounts
+        SELECT
+            aircraft_type_id,
+            aircraft_type.aircraft_name AS aircraft_name,
+            aircraft_type.aircraft_type AS aircraft_type,
+            DATE_TRUNC('week', generate_series) AS week_start,
+            SUM(CASE
+                WHEN EXTRACT(DOW FROM generate_series) = 0 AND sunday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 1 AND monday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 2 AND tuesday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 3 AND wednesday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 4 AND thursday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 5 AND friday_operation THEN 1
+                WHEN EXTRACT(DOW FROM generate_series) = 6 AND saturday_operation THEN 1
+                ELSE 0
+            END) AS schedule_count
+        FROM schedules
+        JOIN aircraft_types aircraft_type ON aircraft_type_id = id_aircraft_type
+        CROSS JOIN generate_series(%s::timestamp, %s::timestamp, interval '1 week') AS generate_series
+        WHERE valid_from <= %s AND valid_to >= %s
+        GROUP BY
+            aircraft_type_id,
+            aircraft_name,
+            aircraft_type,
+            DATE_TRUNC('week', generate_series)
+        ;
+
+        SELECT
+            aircraft_type AS aircraft_type,
+            json_agg(json_build_object(
+                'date', to_char(t.week_start, 'Mon DD') || ' - ' || to_char(t.week_start + interval '6 days', 'Mon DD'),
+                'count', t.schedule_count
+            )) AS dates
+        FROM (
+            SELECT
+                aircraft_type,
+                week_start,
+                SUM(schedule_count) AS schedule_count
+            FROM TempWeeklyScheduleCounts
+            GROUP BY aircraft_type, week_start
+        ) AS t
+        GROUP BY aircraft_type
+
+        UNION ALL
+
+        SELECT
+            'Total' AS aircraft_type,
+            json_agg(json_build_object(
+                'date', to_char(t.week_start, 'Mon DD') || ' - ' || to_char(t.week_start + interval '6 days', 'Mon DD'),
+                'count', t.schedule_count
+            )) AS dates
+        FROM (
+            SELECT
+                week_start,
+                SUM(schedule_count) AS schedule_count
+            FROM TempWeeklyScheduleCounts
+            GROUP BY week_start
+        ) AS t;
+
+"""
+
+    hour_wise_query = """
+        CREATE TEMPORARY TABLE IF NOT EXISTS TempHourlyScheduleCounts (
+           aircraft_type_id TEXT,
+            aircraft_name TEXT,
+            aircraft_type TEXT,
+            hour_interval TEXT,
+            schedule_count INT
+        );
+
+        INSERT INTO TempHourlyScheduleCounts
+        SELECT
+            aircraft_type_id,
+            aircraft_type.aircraft_name AS aircraft_name,
+            aircraft_type.aircraft_type AS aircraft_type,
+            CASE
+                WHEN departure_time >= '0000' AND departure_time <= '0059' THEN '00:00 - 01:00'
+                WHEN departure_time >= '0100' AND departure_time <= '0159' THEN '01:00 - 02:00'
+                WHEN departure_time >= '0200' AND departure_time <= '0259' THEN '02:00 - 03:00'
+                WHEN departure_time >= '0300' AND departure_time <= '0359' THEN '03:00 - 04:00'
+                WHEN departure_time >= '0400' AND departure_time <= '0459' THEN '04:00 - 05:00'
+                WHEN departure_time >= '0500' AND departure_time <= '0559' THEN '05:00 - 06:00'
+                WHEN departure_time >= '0600' AND departure_time <= '0659' THEN '06:00 - 07:00'
+                WHEN departure_time >= '0700' AND departure_time <= '0759' THEN '07:00 - 08:00'
+                WHEN departure_time >= '0800' AND departure_time <= '0859' THEN '08:00 - 09:00'
+                WHEN departure_time >= '0900' AND departure_time <= '0959' THEN '09:00 - 10:00'
+                WHEN departure_time >= '1000' AND departure_time <= '1059' THEN '10:00 - 11:00'
+                WHEN departure_time >= '1100' AND departure_time <= '1159' THEN '11:00 - 12:00'
+                WHEN departure_time >= '1200' AND departure_time <= '1259' THEN '12:00 - 13:00'
+                WHEN departure_time >= '1300' AND departure_time <= '1359' THEN '13:00 - 14:00'
+                WHEN departure_time >= '1400' AND departure_time <= '1459' THEN '14:00 - 15:00'
+                WHEN departure_time >= '1500' AND departure_time <= '1559' THEN '15:00 - 16:00'
+                WHEN departure_time >= '1600' AND departure_time <= '1659' THEN '16:00 - 17:00'
+                WHEN departure_time >= '1700' AND departure_time <= '1759' THEN '17:00 - 18:00'
+                WHEN departure_time >= '1800' AND departure_time <= '1859' THEN '18:00 - 19:00'
+                WHEN departure_time >= '1900' AND departure_time <= '1959' THEN '19:00 - 20:00'
+                WHEN departure_time >= '2000' AND departure_time <= '2059' THEN '20:00 - 21:00'
+                WHEN departure_time >= '2100' AND departure_time <= '2159' THEN '21:00 - 22:00'
+                WHEN departure_time >= '2200' AND departure_time <= '2259' THEN '22:00 - 23:00'
+                WHEN departure_time >= '2300' AND departure_time <= '2359' THEN '23:00 - 24:00'
+                ELSE 'Unknown'
+            END AS hour_interval,
+            
+    COUNT(*) AS schedule_count
+FROM schedules
+    JOIN aircraft_types aircraft_type ON aircraft_type_id = id_aircraft_type
+    WHERE (valid_from IS NULL OR valid_from <= %s::DATE)
+      AND (valid_to IS NULL OR valid_to >= %s::DATE)
+      AND (
+            (EXTRACT(DOW FROM %s::DATE) = 0 AND sunday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 1 AND monday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 2 AND tuesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 3 AND wednesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 4 AND thursday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 5 AND friday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 6 AND saturday_operation)
+          )
+
+GROUP BY
+    aircraft_type_id,
+    aircraft_name,
+    aircraft_type,
+    hour_interval;
+
+WITH TypeCounts AS (
+    SELECT
+        aircraft_type,
+        hour_interval,
+        SUM(schedule_count) AS count
+    FROM TempHourlyScheduleCounts
+    GROUP BY
+        aircraft_type,
+        hour_interval
+)
+SELECT
+    aircraft_type AS name,
+    json_agg(json_build_object('date', hour_interval, 'count', count)) AS dates
+FROM TypeCounts
+GROUP BY name
+
+UNION ALL
+
+SELECT
+    'Total' AS name,
+    json_agg(json_build_object('date', hour_interval, 'count', count)) AS dates
+FROM (
+    SELECT
+        hour_interval,
+        SUM(count) AS count
+    FROM TypeCounts
+    GROUP BY hour_interval
+) AggregatedCounts
+GROUP BY name
+    """
+    
+    month_wise_query = """
+        CREATE TEMPORARY TABLE IF NOT EXISTS TempMonthlyScheduleCounts (
+            aircraft_type_id TEXT,
+            aircraft_name TEXT,
+            aircraft_type TEXT,
+            month DATE,
+            schedule_count INT
+        );
+
+        INSERT INTO TempMonthlyScheduleCounts
+        SELECT
+            aircraft_type_id,
+            aircraft_type.aircraft_name AS aircraft_name,
+            aircraft_type.aircraft_type AS aircraft_type,
+            DATE_TRUNC('month', generate_series) AS "month",
+            SUM(CASE
+                WHEN (EXTRACT(DOW FROM generate_series) = 0 AND sunday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 1 AND monday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 2 AND tuesday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 3 AND wednesday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 4 AND thursday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 5 AND friday_operation) OR
+                    (EXTRACT(DOW FROM generate_series) = 6 AND saturday_operation)
+                THEN 1
+                ELSE 0
+            END) AS schedule_count
+        FROM schedules
+        JOIN aircraft_types aircraft_type ON aircraft_type_id = id_aircraft_type
+        CROSS JOIN generate_series(%s::timestamp, %s::timestamp, interval '1 month') AS generate_series
+        WHERE valid_from <= %s AND valid_to >= %s
+        GROUP BY
+            aircraft_type_id,
+            aircraft_name,
+            aircraft_type,
+            DATE_TRUNC('month', generate_series)
+        ;
+
+        SELECT
+            aircraft_type AS name,
+            json_agg(json_build_object(
+                'date', to_char(t.month, 'Mon'),
+                'count', t.schedule_count
+            )) AS dates
+        FROM (
+            SELECT
+                aircraft_type,
+                month,
+                SUM(schedule_count) AS schedule_count
+            FROM TempMonthlyScheduleCounts
+            GROUP BY aircraft_type, month
+        ) AS t
+        GROUP BY aircraft_type
+
+        UNION ALL
+
+        SELECT
+            'Total' AS name,
+            json_agg(json_build_object(
+                'date', to_char(t.month, 'Mon'),
+                'count', t.schedule_count
+            )) AS dates
+        FROM (
+            SELECT
+                month,
+                SUM(schedule_count) AS schedule_count
+            FROM TempMonthlyScheduleCounts
+            GROUP BY month
+        ) AS t;
+
+"""
+
+    
+    day_wise_query = """
+ CREATE TEMPORARY TABLE IF NOT EXISTS TempDailyScheduleCounts (
+    aircraft_type_id TEXT,
+    aircraft_name TEXT,
+    aircraft_type TEXT,
+    date DATE,
+    schedule_count INT
+);
+
+INSERT INTO TempDailyScheduleCounts
+SELECT
+    aircraft_type_id,
+    aircraft_type.aircraft_name AS aircraft_name,
+    aircraft_type.aircraft_type AS aircraft_type,
+    generate_series AS "date",
+    SUM(CASE
+        WHEN (EXTRACT(DOW FROM generate_series) = 0 AND sunday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 1 AND monday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 2 AND tuesday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 3 AND wednesday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 4 AND thursday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 5 AND friday_operation) OR
+             (EXTRACT(DOW FROM generate_series) = 6 AND saturday_operation)
+        THEN 1
+        ELSE 0
+    END) AS schedule_count
+FROM schedules
+JOIN aircraft_types aircraft_type ON aircraft_type_id = id_aircraft_type
+CROSS JOIN generate_series(%s::timestamp, %s::timestamp, interval '1 day') AS generate_series
+WHERE valid_from <= %s AND valid_to >= %s
+GROUP BY
+    aircraft_type_id,
+    aircraft_name,
+    aircraft_type,
+    generate_series
+;
+
+SELECT
+    aircraft_type AS name,
+    json_agg(json_build_object(
+        'date', t."date",
+        'count', t.schedule_count
+    )) AS dates
+FROM (
+    SELECT
+        aircraft_type,
+        "date",
+        SUM(schedule_count) AS schedule_count
+    FROM TempDailyScheduleCounts
+    GROUP BY aircraft_type, "date"
+) AS t
+GROUP BY aircraft_type
+
+UNION ALL
+
+SELECT
+    'Total' AS name,
+    json_agg(json_build_object(
+        'date', t."date",
+        'count', t.schedule_count
+    )) AS dates
+FROM (
+    SELECT
+        "date",
+        SUM(schedule_count) AS schedule_count
+    FROM TempDailyScheduleCounts
+    GROUP BY "date"
+) AS t;
+
+"""
+    
+    
+
+    with connection.cursor() as cursor:
+        result = []
+        date_intervals = []
+        filtered_data = []
+         # Calculate date difference correctly
+        if valid_from and valid_to:
+           date_difference = (valid_to - valid_from).days
+        if valid_from == valid_to:
+                data_type = "hour"
+                date_intervals = ['00:00 - 01:00', '01:00 - 02:00', '02:00 - 03:00', '03:00 - 04:00', '04:00 - 05:00', '05:00 - 06:00', '06:00 - 07:00', '07:00 - 08:00', '08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00', '15:00 - 16:00', '16:00 - 17:00', '17:00 - 18:00', '18:00 - 19:00', '19:00 - 20:00', '20:00 - 21:00', '21:00 - 22:00', '22:00 - 23:00', '23:00 - 24:00']
+                cursor.execute(hour_wise_query, [valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from])
+                columns = [desc[0] for desc in cursor.description]
+                result = [dict(zip(columns, row)) for row in cursor.fetchall()]    
+
+        elif date_difference <= 30:
+                data_type = "day"
+                date_intervals = calculate_date_between_range(valid_from.strftime('%Y-%m-%d'), valid_to.strftime('%Y-%m-%d'))
+                cursor.execute(day_wise_query, [ valid_from, valid_to, valid_from, valid_to])
+                columns = [desc[0] for desc in cursor.description]
+                result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        elif 30 < date_difference <= 60:
+                data_type = "week"
+                date_intervals = generate_week_intervals(valid_from.strftime('%Y-%m-%d'), valid_to.strftime('%Y-%m-%d'))
+                cursor.execute(week_based_sql_query, [valid_from, valid_to, valid_from, valid_to])
+                columns = [desc[0] for desc in cursor.description]
+                result = [dict(zip(columns, row)) for row in cursor.fetchall()]
+          
+        elif date_difference > 60:
+                data_type = "month"
+                date_intervals = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                cursor.execute(month_wise_query, [valid_from, valid_to, valid_from, valid_to])
+                columns = [desc[0] for desc in cursor.description]
+                result = [dict(zip(columns, row)) for row in cursor.fetchall()]    
+
+    # Initialize the final filtered data
+    filtered_data = []
+    aggregate_data = defaultdict(lambda: defaultdict(int))
+
+    if date_difference > 60:
+        # Iterate over each aircraft type in the result
+        aircraft_types = {entry["name"]: entry["dates"] for entry in result if entry["name"]}
+        for aircraft_data in result:
+            aircraft_type = aircraft_data["name"]
+            for date_entry in aircraft_data["dates"]:
+                curr_date = date_entry["date"]
+                curr_count = date_entry["count"]
+                aggregate_data[aircraft_type][curr_date] += curr_count
+
+        for aircraft_type, dates in aggregate_data.items():
+            curr_data = {
+                "aircraft_type": aircraft_type,
+                "dates": [{"date": date, "count": count} for date, count in dates.items()]
+            }
+            filtered_data.append(curr_data)
+            print('s')
+    elif 30 < date_difference <= 60:
+        month_mapping = {
+            'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+            'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12
+        }
+        # Iterate over each aircraft type in the result
+        aircraft_types = {entry["aircraft_type"]: entry["dates"] for entry in result if entry["aircraft_type"]}
+        date_intervals = sorted({date_item['date'] for item in result for date_item in item['dates']})
+        sorted_dates = sorted(date_intervals, key=lambda date_interval: (
+            month_mapping[date_interval.split()[0]],  # Get the month value
+            int(date_interval.split()[1])  # Get the day value
+        ))
+        date_intervals = sorted_dates
+        filtered_data = result
+
+    else:
+        # Iterate over each aircraft type in the result
+        aircraft_types = {entry["name"]: entry["dates"] for entry in result if entry["name"]}
+        for aircraft_type, dates in aircraft_types.items():
+            curr_data = {
+                "aircraft_type": aircraft_type,
+                "dates": []
+            }
+
+            for curr_date in date_intervals:
+                data_avail = next(
+                    (obj for obj in dates if obj["date"] == curr_date),
+                    {"date": curr_date, "count": 0}
+                )
+                curr_data["dates"].append(data_avail)
+
+            filtered_data.append(curr_data)
+
+
+    response_data = {
+        'success': True,
+        'respayload': {
+            "valid_from_date":valid_from,
+            "valid_to_date":valid_to,
+            "aircraft_data": filtered_data,
+            "date_range": date_intervals,
+            "type": data_type
+        },
+        'message': 'aircraft Based aircraft_type data is fetched successfully',
+    }
+
+    return JsonResponse(response_data)
 
 @api_view(['GET'])
+@csrf_exempt
 def paxhandling_deomestic_international_report(request):
     date = request.GET.get('date', None)
     filterby = request.GET.get('filter_by', None)
@@ -3083,7 +3593,4 @@ def paxhandling_deomestic_international_report(request):
             }
         }
     return JsonResponse(response_data, safe=False)
-
-
-
 

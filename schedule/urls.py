@@ -19,9 +19,11 @@ urlpatterns = [
     path('getairlinepaxhandlingreport/', views.airline_paxhandling_report, name='airline_paxhandling_report'),
     path('getairlineslist', views.getAirlinesList, name='get_airlines_list'),
     path('getaircraftslist', views.getAircraftsList, name='get_aircrafts_list'),
+
+    path('airlinearrivalsdeparturesreport/', views.airline_arrivalsdepartures_report, name='airline_arrivalsdepartures_report'),
     path('getstationslist', views.getStationsList, name='get_stations_list'),
     path('airlinearrivalsdeparturesreport/', views.airline_arrivalsdepartures_report, name='airline_arrivalsdepartures_report'),
-    path('airlinearrivalsdeparturesreport/', views.airline_arrivalsdepartures_report, name='airline_arrivalsdepartures_report'),
+    path('aircrafttypecount', views.getAircraftTypeCount, name='aircraft_type_count'),
     path('getPaxhandlingreportInternationalAndDomestic/', views.paxhandling_deomestic_international_report, name='getpaxhandlingreportInternationalAndDomestic'),
 ]
 
