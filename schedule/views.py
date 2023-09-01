@@ -396,6 +396,7 @@ def airline_schedule_report(request):
     airline_id = request.GET.getlist('airline_id', [])
     day_wise = request.GET.get('day_wise').lower() == 'true'
     filter_by = request.GET.get('filter_by')
+    schedule_type = request.GET.get('schedule_type_id')
     start_date = ''
     end_date = ''
     date_query = ''
@@ -599,7 +600,8 @@ def airline_schedule_report(request):
             # for single date
             # if airline_id == []:
             interval_type = "hour"
-            cursor.execute(build_hour_wise_query(start_date, filter_by, airline_id_tuple))
+            hoursArray = ['00:00 - 01:00', '01:00 - 02:00', '02:00 - 03:00', '03:00 - 04:00', '04:00 - 05:00', '05:00 - 06:00', '06:00 - 07:00', '07:00 - 08:00', '08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00', '15:00 - 16:00', '16:00 - 17:00', '17:00 - 18:00', '18:00 - 19:00', '19:00 - 20:00', '20:00 - 21:00', '21:00 - 22:00', '22:00 - 23:00', '23:00 - 24:00']
+            cursor.execute(build_hour_wise_query(start_date, filter_by, airline_id_tuple, schedule_type))
             # else:
             #     cursor.execute(build_hour_wise_query(start_date, filter_by) + airline_condition)
             
@@ -612,9 +614,8 @@ def airline_schedule_report(request):
         
         # checking if the date single or multiple
         if(start_date == end_date and day_wise == False):
-            data = []
-            for row in cursor.fetchall():
-                data.append(dict(zip(columns, row)))
+            columns = [desc[0] for desc in cursor.description]
+            result = [dict(zip(columns, row)) for row in cursor.fetchall()]
         else:
             result = [dict(zip(columns, row)) for row in cursor.fetchall()]
         
@@ -626,7 +627,8 @@ def airline_schedule_report(request):
                 curr_airline_date_range = curr_airline["date_range"]
                 curr_date_count = list(filter(lambda date: date["date"] == curr_date, curr_airline_date_range))
                 if curr_date_count and len(curr_date_count) > 0:
-                    total_count = total_count + curr_date_count[0]['count']
+                    if curr_date_count[0]['count'] is not None and curr_date_count[0]['count'] != '':
+                        total_count = total_count + curr_date_count[0]['count']
                 else:
                     total_count = total_count + 0
 
@@ -635,15 +637,23 @@ def airline_schedule_report(request):
         hoursArray = []
         # if the it is just a single date then we need to append the data as hours 
         if(start_date == end_date and day_wise == False):
-            finaldata = count_flights_by_hour(data),
             for hour in range(24):
                 hoursArray.append(str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)))
-                total_for_that_day = add_total_count(finaldata[0], str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),)
+                total_for_that_day = add_total_count(result, str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),)
                 total_data['date_range'].append({
                     "date": str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),
                     "count": total_for_that_day
                 })
-            finaldata[0].append(total_data)
+            result.append(total_data)
+            # finaldata = count_flights_by_hour(data),
+            # for hour in range(24):
+            #     hoursArray.append(str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)))
+            #     total_for_that_day = add_total_count(finaldata[0], str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),)
+            #     total_data['date_range'].append({
+            #         "date": str(convert_to_time_format(hour)) + ' - ' + str(convert_to_time_format(hour + 1)),
+            #         "count": total_for_that_day
+            #     })
+            # finaldata[0].append(total_data)
         else:
             # calculate total for all the flights
             for curr_date in date_array:
@@ -671,7 +681,7 @@ def airline_schedule_report(request):
             'success': True,
             'message': 'Data fetched successfully',
             'respayload': {
-                'airlines_data': finaldata[0] if (start_date == end_date and day_wise == False) else result,
+                'airlines_data': result,
                 'date_range':hoursArray if (start_date == end_date and day_wise == False) else date_array,
                 "type": interval_type
             }
@@ -1059,12 +1069,31 @@ def calculate_datewise_data(request, current_date):
 
 def OriginBasedAirlineswise(request):
 
-    valid_from = request.GET.get('valid_from', None)
-    valid_to = request.GET.get('valid_to', None)
+    current_date = timezone.now().date()
 
-    valid_from_date = datetime.strptime(valid_from, '%Y-%m-%d').date() if valid_from else None
-    valid_to_date = datetime.strptime(valid_to, '%Y-%m-%d').date() if valid_to else None
+    valid_from = request.GET.get('valid_from')
+    valid_to = request.GET.get('valid_to')
+    schedule_type = request.GET.get('schedule_type_id')
+    if schedule_type:
+        schedule_type = int(schedule_type)
+    else:
+        schedule_type = 0
 
+    if valid_from:
+       valid_from = datetime.strptime(valid_from, '%Y-%m-%d').date()
+    if valid_to:
+       valid_to = datetime.strptime(valid_to, '%Y-%m-%d').date()
+    else:
+        valid_from, valid_to = get_valid_date_range(current_date)
+        if valid_from and valid_to:
+            if valid_from <= current_date <= valid_to:
+                valid_from = current_date
+                valid_to = current_date
+            else:
+                earliest_date, _ = get_valid_date_range(current_date)
+                valid_from = earliest_date
+                valid_to = earliest_date
+   
     data_type = ""
     
     week_based_sql_query = """
@@ -1083,6 +1112,17 @@ def OriginBasedAirlineswise(request):
             WHERE
                 valid_from::date BETWEEN %s AND %s
                 AND valid_to::date BETWEEN %s AND %s
+        
+            AND (
+                (EXTRACT(DOW FROM %s::DATE) = 0 AND sunday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 1 AND monday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 2 AND tuesday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 3 AND wednesday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 4 AND thursday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 5 AND friday_operation) OR
+                (EXTRACT(DOW FROM %s::DATE) = 6 AND saturday_operation)
+            )
+        AND (id_schedule_type_id = %s OR %s = 0) 
         )
         , ExpandedDates AS (
             SELECT
@@ -1183,7 +1223,7 @@ def OriginBasedAirlineswise(request):
             origin_station.station_code AS station_code,
             origin_airline.airline_name AS airline_name,
             origin_airline.airline_code AS airline_code,
-            CASE
+              CASE
                 WHEN departure_time >= '0000' AND departure_time <= '0059' THEN '00:00 - 01:00'
                 WHEN departure_time >= '0100' AND departure_time <= '0159' THEN '01:00 - 02:00'
                 WHEN departure_time >= '0200' AND departure_time <= '0259' THEN '02:00 - 03:00'
@@ -1210,11 +1250,23 @@ def OriginBasedAirlineswise(request):
                 WHEN departure_time >= '2300' AND departure_time <= '2359' THEN '23:00 - 24:00'
                 ELSE 'Unknown'
             END AS hour_interval,
-            COUNT(*) AS schedule_count
-        FROM schedules
-        JOIN stations origin_station ON origin_station_id = id_station
-        JOIN airlines origin_airline ON arrival_airline_id = id_airline
-        WHERE valid_from <= %s::DATE AND valid_to >= %s::DATE
+            
+    COUNT(*) AS schedule_count
+FROM schedules
+    JOIN stations origin_station ON origin_station_id = id_station
+    JOIN airlines origin_airline ON arrival_airline_id = id_airline
+    WHERE (valid_from IS NULL OR valid_from <= %s::DATE)
+      AND (valid_to IS NULL OR valid_to >= %s::DATE)
+      AND (
+            (EXTRACT(DOW FROM %s::DATE) = 0 AND sunday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 1 AND monday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 2 AND tuesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 3 AND wednesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 4 AND thursday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 5 AND friday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 6 AND saturday_operation)
+          )
+     AND (id_schedule_type_id = %s OR %s = 0) 
         GROUP BY
             origin_station_id,
             arrival_airline_id,
@@ -1261,11 +1313,13 @@ def OriginBasedAirlineswise(request):
         GROUP BY
             origin_station_id,
             station_name
-        ORDER BY
-            origin_station_id,
-            station_name
+
+    ORDER BY
+        origin_station_id,
+        station_name
+
     """
-    
+
     month_wise_query = """
         CREATE TEMPORARY TABLE IF NOT EXISTS TempMonthlyScheduleCounts (
             origin_station_id TEXT,
@@ -1279,31 +1333,42 @@ def OriginBasedAirlineswise(request):
         );
 
         INSERT INTO TempMonthlyScheduleCounts
-        SELECT
-            origin_station_id,
-            arrival_airline_id,
-            origin_station.station_name AS station_name,
-            origin_station.station_code AS station_code,
-            origin_airline.airline_name AS airline_name,
-            origin_airline.airline_code AS airline_code,
-            to_char(date_trunc('month', valid_from), 'Mon') AS month,
-            COUNT(*) AS schedule_count
-        FROM schedules
-        JOIN stations origin_station ON origin_station_id = id_station
-        JOIN airlines origin_airline ON arrival_airline_id = id_airline
-        WHERE 
-            (valid_from <= %s::DATE AND valid_to >= %s::DATE) OR
-            (valid_from <= %s::DATE AND valid_to >= %s::DATE)
-        GROUP BY
-            origin_station_id,
-            arrival_airline_id,
-            station_name,
-            station_code,
-            airline_name,
-            airline_code,
-            month;
+SELECT
+    origin_station_id,
+    arrival_airline_id,
+    origin_station.station_name AS station_name,
+    origin_station.station_code AS station_code,
+    origin_airline.airline_name AS airline_name,
+    origin_airline.airline_code AS airline_code,
+    to_char(date_trunc('month', valid_from), 'Mon') AS month,
+    COUNT(*) AS schedule_count
+FROM schedules
+JOIN stations origin_station ON origin_station_id = id_station
+JOIN airlines origin_airline ON arrival_airline_id = id_airline
 
-        SELECT
+    WHERE (valid_from IS NULL OR valid_from <= %s::DATE)
+    AND (valid_to IS NULL OR valid_to >= %s::DATE)
+    AND (
+        (EXTRACT(DOW FROM %s::DATE) = 0 AND sunday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 1 AND monday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 2 AND tuesday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 3 AND wednesday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 4 AND thursday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 5 AND friday_operation) OR
+        (EXTRACT(DOW FROM %s::DATE) = 6 AND saturday_operation)
+    )
+    -- Add a condition to filter based on schedule_type
+     AND (id_schedule_type_id = %s OR %s = 0) 
+
+GROUP BY
+    origin_station_id,
+    arrival_airline_id,
+    station_name,
+    station_code,
+    airline_name,
+    airline_code,
+    month;
+SELECT
             origin_station_id,
             station_name,
             json_agg(airline_info) AS airlines_data
@@ -1366,11 +1431,24 @@ def OriginBasedAirlineswise(request):
                 origin_airline.airline_name AS airline_name,
                 origin_airline.airline_code AS airline_code,
                 generate_series(%s, %s, interval '1 day')::date,
+                
                 COUNT(*) AS schedule_count
             FROM schedules
+            
             JOIN stations origin_station ON origin_station_id = id_station
             JOIN airlines origin_airline ON arrival_airline_id = id_airline
-            WHERE valid_from <= %s AND valid_to >= %s
+             WHERE (valid_from IS NULL OR valid_from <= %s::DATE)
+             AND (valid_to IS NULL OR valid_to >= %s::DATE)
+             AND (
+            (EXTRACT(DOW FROM %s::DATE) = 0 AND sunday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 1 AND monday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 2 AND tuesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 3 AND wednesday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 4 AND thursday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 5 AND friday_operation) OR
+            (EXTRACT(DOW FROM %s::DATE) = 6 AND saturday_operation)
+          )
+            AND (id_schedule_type_id = %s OR %s = 0) 
             GROUP BY
                 origin_station_id,
                 arrival_airline_id,
@@ -1414,6 +1492,7 @@ def OriginBasedAirlineswise(request):
                             JOIN stations origin_station ON origin_station_id = id_station
                             JOIN airlines origin_airline ON arrival_airline_id = id_airline
                             WHERE valid_from <= %s AND valid_to >= %s
+                            AND (id_schedule_type_id = %s OR %s = 0) 
                             GROUP BY 
                                 origin_station_id, 
                                 arrival_airline_id, 
@@ -1446,31 +1525,31 @@ def OriginBasedAirlineswise(request):
         result = []
         date_intervals = []
         filtered_data = []
-        if valid_from_date and valid_to_date:
-            date_difference = (valid_to_date - valid_from_date).days
+        if valid_from and valid_to:
+            date_difference = (valid_to - valid_from).days
 
             if valid_from == valid_to:
                 data_type = "hour"
                 date_intervals = ['00:00 - 01:00', '01:00 - 02:00', '02:00 - 03:00', '03:00 - 04:00', '04:00 - 05:00', '05:00 - 06:00', '06:00 - 07:00', '07:00 - 08:00', '08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00', '15:00 - 16:00', '16:00 - 17:00', '17:00 - 18:00', '18:00 - 19:00', '19:00 - 20:00', '20:00 - 21:00', '21:00 - 22:00', '22:00 - 23:00', '23:00 - 24:00']
-                cursor.execute(hour_wise_query, [valid_from, valid_to])
+                cursor.execute(hour_wise_query, [valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from,schedule_type, schedule_type])
                 columns = [desc[0] for desc in cursor.description]
                 result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             elif date_difference < 30:
                 data_type = "day"
-                date_intervals = calculate_date_between_range(valid_from, valid_to)
-                cursor.execute(day_wise_query, [valid_from, valid_to, valid_to, valid_from, valid_from, valid_to, valid_from, valid_to, valid_to, valid_from])
+                date_intervals =  calculate_date_between_range(valid_from.strftime('%Y-%m-%d'), valid_to.strftime('%Y-%m-%d'))
+                cursor.execute(day_wise_query, [valid_from, valid_to, valid_to, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from, schedule_type, schedule_type, valid_from, valid_to, valid_from, valid_to, valid_to, valid_from,schedule_type, schedule_type])
                 columns = [desc[0] for desc in cursor.description]
                 result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             elif 30 < date_difference <= 60:
                 data_type = "week"
-                date_intervals = generate_week_intervals(valid_from, valid_to)
-                cursor.execute(week_based_sql_query, [valid_from, valid_from, valid_to, valid_to])
+                date_intervals = generate_week_intervals(valid_from.strftime('%Y-%m-%d'), valid_to.strftime('%Y-%m-%d'))
+                cursor.execute(week_based_sql_query, [valid_from, valid_from, valid_to, valid_to,valid_from, valid_from,valid_from, valid_from,valid_from, valid_from,valid_from,schedule_type, schedule_type])
                 columns = [desc[0] for desc in cursor.description]
                 result = [dict(zip(columns, row)) for row in cursor.fetchall()]
             elif date_difference > 60:
                 data_type = "month"
                 date_intervals = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                cursor.execute(month_wise_query, [valid_from, valid_from, valid_to, valid_to])
+                cursor.execute(month_wise_query, [valid_to,valid_from, valid_from,valid_from,valid_from, valid_from,valid_from, valid_from,valid_from,schedule_type, schedule_type])
                 columns = [desc[0] for desc in cursor.description]
                 result = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
@@ -2700,9 +2779,11 @@ SELECT DISTINCT s.station_name, s.station_code, s.station_logo,
         
         except jwt.ExpiredSignatureError:
             return manual_error_response(401, "Token has expired", "")
-        
+
         except jwt.DecodeError:
             return manual_error_response(401, "Invalid token", "")
+
+       
 
         
 

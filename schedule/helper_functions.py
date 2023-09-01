@@ -308,62 +308,148 @@ def generate_week_intervals(from_date, to_date):
         # If an error occurs, return an error response
         return e
 
-def build_hour_wise_query(start_date, filter_by, airline_id_tuple):
-    base_query = """
-        SELECT
-            airline.id_airline AS id_airline,
-            airline.airline_name AS airline_name,
-            airline.airline_code AS airline_code,
-            schedule.arrival_time,
-            schedule.departure_time,
-            schedule.valid_from,
-            schedule.valid_to,
-            schedule.arrival_airline_id
-        FROM
-            schedules AS schedule
-    """
+def build_hour_wise_query(start_date, filter_by, airline_id_tuple, schedule_type):
+    # base_query = """
+    #     SELECT
+    #         airline.id_airline AS id_airline,
+    #         airline.airline_name AS airline_name,
+    #         airline.airline_code AS airline_code,
+    #         schedule.arrival_time,
+    #         schedule.departure_time,
+    #         schedule.valid_from,
+    #         schedule.valid_to,
+    #         schedule.arrival_airline_id
+    #     FROM
+    #         schedules AS schedule
+    # """
     
     if filter_by == 'arrival':
-        join_condition = "LEFT JOIN airlines AS airline ON schedule.arrival_airline_id = airline.id_airline"
+        join_condition = "LEFT JOIN airlines AS airline ON schedules.arrival_airline_id = airline.id_airline"
     elif filter_by == 'departure':
-        join_condition = "LEFT JOIN airlines AS airline ON schedule.departure_airline_id = airline.id_airline"
+        join_condition = "LEFT JOIN airlines AS airline ON schedules.departure_airline_id = airline.id_airline"
     else:
-        join_condition = "LEFT JOIN airlines AS airline ON schedule.arrival_airline_id = airline.id_airline OR schedule.departure_airline_id = airline.id_airline"
+        join_condition = "LEFT JOIN airlines AS airline ON schedules.arrival_airline_id = airline.id_airline OR schedules.departure_airline_id = airline.id_airline"
     print(airline_id_tuple)
     if(airline_id_tuple != ''):
         if filter_by == 'arrival':
-            airline_condition = f"AND schedule.arrival_airline_id IN ({airline_id_tuple})"
+            airline_condition = f"AND schedules.arrival_airline_id IN ({airline_id_tuple})"
         elif filter_by == 'departure':
-            airline_condition = f"AND schedule.departure_airline_id IN ({airline_id_tuple})"
+            airline_condition = f"AND schedules.departure_airline_id IN ({airline_id_tuple})"
         else:
             airline_condition = f"""
                 AND (
-                    schedule.arrival_airline_id IN ({airline_id_tuple}) OR 
-                    schedule.departure_airline_id IN ({airline_id_tuple})
+                    schedules.arrival_airline_id IN ({airline_id_tuple}) OR 
+                    schedules.departure_airline_id IN ({airline_id_tuple})
                 )
             """
     else:
         airline_condition = ''
-    full_query = f"""
-        {base_query}
-        {join_condition}
-        WHERE
-            (
-                schedule.valid_from <= '{start_date}' AND (schedule.valid_to IS NULL OR schedule.valid_to >= '{start_date}')
-            )
-            AND (
-                (EXTRACT(DOW FROM '{start_date}'::date) = 0 AND (schedule.sunday_operation = TRUE OR schedule.sunday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 1 AND (schedule.monday_operation = TRUE OR schedule.monday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 2 AND (schedule.tuesday_operation = TRUE OR schedule.tuesday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 3 AND (schedule.wednesday_operation = TRUE OR schedule.wednesday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 4 AND (schedule.thursday_operation = TRUE OR schedule.thursday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 5 AND (schedule.friday_operation = TRUE OR schedule.friday_operation IS NULL)) OR
-                (EXTRACT(DOW FROM '{start_date}'::date) = 6 AND (schedule.saturday_operation = TRUE OR schedule.saturday_operation IS NULL))
-            )
-        {airline_condition}
+    
+    # Schedule type filter condition
+    schedule_type_condition = ''
+    
+    if schedule_type is not None and schedule_type != '':
+        schedule_type_condition = f"AND (schedules.id_schedule_type_id = {schedule_type})"
+        
+    # full_query = f"""
+    #     {base_query}
+    #     {join_condition}
+    #     WHERE
+    #         (
+    #             schedule.valid_from <= '{start_date}' AND (schedule.valid_to IS NULL OR schedule.valid_to >= '{start_date}')
+    #         )
+    #         AND (
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 0 AND (schedule.sunday_operation = TRUE OR schedule.sunday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 1 AND (schedule.monday_operation = TRUE OR schedule.monday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 2 AND (schedule.tuesday_operation = TRUE OR schedule.tuesday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 3 AND (schedule.wednesday_operation = TRUE OR schedule.wednesday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 4 AND (schedule.thursday_operation = TRUE OR schedule.thursday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 5 AND (schedule.friday_operation = TRUE OR schedule.friday_operation IS NULL)) OR
+    #             (EXTRACT(DOW FROM '{start_date}'::date) = 6 AND (schedule.saturday_operation = TRUE OR schedule.saturday_operation IS NULL))
+    #         )
+    #     {schedule_type_condition}
+    #     {airline_condition}
+    # """
+    
+    hour_wise_query = f"""
+        CREATE TEMPORARY TABLE IF NOT EXISTS TempHourlyAirlineScheduleCounts (
+            id_airline TEXT,
+            airline_name TEXT,
+            airline_code TEXT,
+            hour_interval TEXT,
+            schedule_count INT
+        );
+
+        INSERT INTO TempHourlyAirlineScheduleCounts
+        SELECT
+            origin_airline.id_airline AS id_airline,
+            origin_airline.airline_name AS airline_name,
+            origin_airline.airline_code AS airline_code,
+            CASE
+                WHEN departure_time >= '0000' AND departure_time <= '0059' THEN '00:00 - 01:00'
+                WHEN departure_time >= '0100' AND departure_time <= '0159' THEN '01:00 - 02:00'
+                WHEN departure_time >= '0200' AND departure_time <= '0259' THEN '02:00 - 03:00'
+                WHEN departure_time >= '0300' AND departure_time <= '0359' THEN '03:00 - 04:00'
+                WHEN departure_time >= '0400' AND departure_time <= '0459' THEN '04:00 - 05:00'
+                WHEN departure_time >= '0500' AND departure_time <= '0559' THEN '05:00 - 06:00'
+                WHEN departure_time >= '0600' AND departure_time <= '0659' THEN '06:00 - 07:00'
+                WHEN departure_time >= '0700' AND departure_time <= '0759' THEN '07:00 - 08:00'
+                WHEN departure_time >= '0800' AND departure_time <= '0859' THEN '08:00 - 09:00'
+                WHEN departure_time >= '0900' AND departure_time <= '0959' THEN '09:00 - 10:00'
+                WHEN departure_time >= '1000' AND departure_time <= '1059' THEN '10:00 - 11:00'
+                WHEN departure_time >= '1100' AND departure_time <= '1159' THEN '11:00 - 12:00'
+                WHEN departure_time >= '1200' AND departure_time <= '1259' THEN '12:00 - 13:00'
+                WHEN departure_time >= '1300' AND departure_time <= '1359' THEN '13:00 - 14:00'
+                WHEN departure_time >= '1400' AND departure_time <= '1459' THEN '14:00 - 15:00'
+                WHEN departure_time >= '1500' AND departure_time <= '1559' THEN '15:00 - 16:00'
+                WHEN departure_time >= '1600' AND departure_time <= '1659' THEN '16:00 - 17:00'
+                WHEN departure_time >= '1700' AND departure_time <= '1759' THEN '17:00 - 18:00'
+                WHEN departure_time >= '1800' AND departure_time <= '1859' THEN '18:00 - 19:00'
+                WHEN departure_time >= '1900' AND departure_time <= '1959' THEN '19:00 - 20:00'
+                WHEN departure_time >= '2000' AND departure_time <= '2059' THEN '20:00 - 21:00'
+                WHEN departure_time >= '2100' AND departure_time <= '2159' THEN '21:00 - 22:00'
+                WHEN departure_time >= '2200' AND departure_time <= '2259' THEN '22:00 - 23:00'
+                WHEN departure_time >= '2300' AND departure_time <= '2359' THEN '23:00 - 24:00'
+                ELSE 'Unknown'
+            END AS hour_interval,
+            Count(*) AS schedule_count
+        FROM schedules
+        {'JOIN airlines origin_airline ON arrival_airline_id = id_airline' if filter_by == 'arrival' else 'JOIN airlines origin_airline ON departure_airline_id = id_airline' if filter_by == 'departure' else 'JOIN airlines origin_airline ON (arrival_airline_id = id_airline OR departure_airline_id = id_airline)'}
+        WHERE 
+            schedules.valid_from <= '{start_date}' AND (schedules.valid_to IS NULL OR schedules.valid_to >= '{start_date}')
+            {airline_condition}
+            {schedule_type_condition}
+        GROUP BY
+            id_airline,
+            arrival_airline_id,
+            airline_name,
+            airline_code,
+            hour_interval;
+
+        SELECT
+            id_airline,
+            airline_name,
+            json_agg(hourly_info) AS date_range
+        FROM (
+            SELECT
+                id_airline,
+                airline_name,
+                hour_interval,
+                json_build_object(
+                    'date', hour_interval,
+                    'count', schedule_count
+                ) AS hourly_info
+            FROM
+                TempHourlyAirlineScheduleCounts
+        ) AS hourly_info_subquery
+        GROUP BY
+            id_airline,
+            airline_name
+        ORDER BY
+            id_airline
     """
     
-    return full_query
+    return hour_wise_query
 
 
 def count_no_of_seats_in_flights_by_hour(flights):
