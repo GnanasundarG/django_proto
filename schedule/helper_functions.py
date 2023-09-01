@@ -1,4 +1,5 @@
-from schedule.models import AircraftType, Airlines, ScheduleTypes, Stations
+import math
+from schedule.models import AircraftType, Airlines, ScheduleTypes, Schedules, Stations
 from datetime import date, timedelta, datetime
 
 
@@ -12,21 +13,134 @@ def set_weekday_variables(input_string):
     return activityStatus
 
 
+
+# to check the exception handling for these data
+def replace_with_null(value):
+    if value in ['On Ground', 'Not Applicable', 'N/A','nan','?']:
+        return None
+    return value
+# to use this function for string values exception in the table
+def handle_service_value(value):
+    if isinstance(value, str):
+        return replace_with_null(value)
+    return None
+# to check the every object in the model and the value is None then it will show as null
+def get_object_or_none(model, **kwargs):
+    try:
+        return model.objects.get(**kwargs)
+    except model.DoesNotExist:
+        return None
+# to use this function for time formatting data.
+def formatted_time(time_value):
+    if time_value in ['On Ground', 'Not Applicable', 'N/A']:
+        return None
+    
+    if time_value is None or (isinstance(time_value, float) and math.isnan(time_value)):
+        return None
+        
+    if time_value < 0 or time_value > 2359:
+        return "0000"
+    
+    hours = int(time_value) // 100
+    minutes = int(time_value) % 100
+
+    if hours > 23:
+        hours %= 10
+
+    formatted_num = f"{hours:02d}{minutes:02d}"
+    return formatted_num
+# to use this function for int values exception in the table
+def safe_convert_to_int(value):
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+# for non schedule flight if the airline is not there in the airlines table we can add the airline data  
+def get_or_add_airline(operator_name):
+    try:
+        airline = Airlines.objects.get(airline_name=operator_name)
+       
+        return airline
+    except Airlines.DoesNotExist:
+        new_airline = Airlines(airline_name=operator_name, airline_code=None,)
+        
+        new_airline.save()
+       
+        return new_airline
+# to check the station code is there or not in the table if its not then fetch the id based on the station name
+def get_station(station_code, station_name):
+    station = get_object_or_none(Stations, station_code=station_code)
+    
+    if station_code is None:
+        station = get_object_or_none(Stations, station_name=station_name)
+    
+    return station
+# to check the aircraft code is there or not in the table if its not then fetch the id based on the aircraft name
+def get_aircraft(aircraft_code, aircraft_name):
+    aircraft = get_object_or_none(AircraftType, aircraft_code=aircraft_code)
+    
+    if aircraft is None:
+        aircraft = get_object_or_none(AircraftType, aircraft_name=aircraft_name)
+    
+    return aircraft
+# to check the airlines code is there or not in the table if its not then fetch the id based on the airlines name
+def get_airline(airline_code, airline_name):
+    airline = get_object_or_none(Airlines, airline_code=airline_code)
+    
+    if airline is None:
+        airline = get_object_or_none(Airlines, airline_name=airline_name)
+    
+    return airline
+# to map the excel data into schedules model for uploading an schedule
 def map_excel_data_to_model(excel_data_list, scheduleTypeID):
     mapped_data_list = []
+
     for excel_data in excel_data_list:
-        # # get object ID's
-        arrival_airline = Airlines.objects.get(airline_code=excel_data.get('Airline  (Arrival)'),)
-        departure_airline = Airlines.objects.get(airline_code=excel_data.get('Airline  (Departure)'),)
-        origin_station = Stations.objects.get(station_code=excel_data.get('Origin'),)
-        destination_station = Stations.objects.get(station_code=excel_data.get('Destination'),)
-        arrival_station = Stations.objects.get(station_code=excel_data.get('Arrival (via)'),)
-        departure_station = Stations.objects.get(station_code=excel_data.get('Departure (via)'),)
-        aircraft_type = AircraftType.objects.get(aircraft_code=excel_data.get('Aircraft Type'),)
-        scheduleType = ScheduleTypes.objects.get(id_schedule_type = scheduleTypeID)
-        # check day wise availability
-        daysWiseActivity = set_weekday_variables(excel_data.get('Days of Operation'),)
-        # Check if "Remarks" column contains specific keywords
+        
+        mapped_data = {}
+        origin_station_code=replace_with_null(excel_data.get('Origin'))
+        origin_station = get_station(origin_station_code, origin_station_code)
+
+        destination_station_code=replace_with_null(excel_data.get('Destination'))
+        destination_station = get_station(destination_station_code, destination_station_code)
+        arrival_station_code=replace_with_null(excel_data.get('Arrival (via)'))
+        arrival_station = get_station(arrival_station_code, arrival_station_code)
+        departure_station_code=replace_with_null(excel_data.get('Departure (via)'))
+        departure_station = get_station(departure_station_code, departure_station_code)
+        scheduletype_id=ScheduleTypes.objects.get(id_schedule_type=scheduleTypeID)
+        daysWiseActivity = set_weekday_variables(excel_data.get('Days of Operation'))
+        service_arrival = handle_service_value(excel_data.get('Service Type - Arr'))
+        service_departure = handle_service_value(excel_data.get('Service Type - Dep'))
+        aircraft_regn = handle_service_value(excel_data.get('Aircraft Regn'))
+        # Inside your map_excel_data_to_model function
+        arrival_flight_no = safe_convert_to_int(replace_with_null(excel_data.get('Flight No. (Arrival)')))
+        departure_flight_no = safe_convert_to_int(replace_with_null(excel_data.get('Flight No. (Departure)')))
+        no_of_Seats = safe_convert_to_int(replace_with_null(excel_data.get('No. of Seats')))
+        arrival_time = formatted_time(excel_data.get('Schedule Time (Arrival)'))
+        departure_time = formatted_time(excel_data.get('Schedule Time (Departure)'))
+        aircraft_type_code=replace_with_null(excel_data.get('Aircraft Type'))
+        aircraft_type = get_aircraft(aircraft_type_code,aircraft_type_code)
+        if scheduletype_id.id_schedule_type == 1:
+           arrival_airline_code = replace_with_null(excel_data.get('Airline  (Arrival)'))
+           arrival_airline = get_airline(arrival_airline_code,arrival_airline_code)
+           departure_airline_code = replace_with_null(excel_data.get('Airline  (Departure)'))
+           departure_airline = get_airline(departure_airline_code,departure_airline_code)
+          
+        else:
+          aircraft_name = replace_with_null(excel_data.get('Aircraft Type'))
+          arrival_operator_name = replace_with_null(excel_data.get('Operators  (Arrival)'))
+          departure_operator_name = replace_with_null(excel_data.get('Operators  (Departure)'))
+            # For non-schedule flights, use operators columns instead of airlines
+          if arrival_operator_name is None:
+            arrival_airline = None
+          else:
+            arrival_airline = get_or_add_airline(arrival_operator_name)
+          if departure_operator_name is None:
+            departure_airline = None
+          else:
+           departure_airline = get_or_add_airline(departure_operator_name)
+             
+         # Check if "Remarks" column contains specific keywords
         remarks = str(excel_data.get('Remarks', '')).lower().strip()  # Convert to string
         remarks_exception=[
             'overnight parking',
@@ -36,14 +150,14 @@ def map_excel_data_to_model(excel_data_list, scheduleTypeID):
             overnight_parking = True
         else:
             overnight_parking = False
-        mapped_data = {
-            'id_schedule_type': scheduleType,
-            'arrival_airline' :  arrival_airline,
-            'departure_airline' :  departure_airline,
-            'arrival_flight_no' : excel_data.get('Flight No. (Arrival)'), # or excel_data.get('full_name'),
-            'departure_flight_no' : excel_data.get('Flight No. (Departure)'),
+        mapped_data.update ({
+            'id_schedule_type': scheduletype_id,
+            'arrival_airline': arrival_airline,
+            'departure_airline': departure_airline,
+            'arrival_flight_no' :  arrival_flight_no,
+            'departure_flight_no' : departure_flight_no,
             'valid_from' :  excel_data.get('From'),
-            'valid_to' :  excel_data.get('To'),
+            'valid_to' : excel_data.get('To'),
             'sunday_operation' :  daysWiseActivity[0],
             'monday_operation' :  daysWiseActivity[1],
             'tuesday_operation' :  daysWiseActivity[2],
@@ -55,17 +169,21 @@ def map_excel_data_to_model(excel_data_list, scheduleTypeID):
             'destination_station' :  destination_station,
             'arrival_station' :  arrival_station,
             'departure_station' :  departure_station,
-            'arrival_time' : format_time(excel_data.get('Schedule Time (Arrival)')),
-            'departure_time' : format_time(excel_data.get('Schedule Time (Departure)')),
-            'no_of_seats' :  excel_data.get('No. of Seats'),
-            'aircraft_type' :  aircraft_type,
-             'overnight_parking': overnight_parking,
-            'service_type_arrival' : excel_data.get('Service Type - Arr'),
-            'service_type_departure' : excel_data.get('Service Type - Dep'),
-            }
-        mapped_data_list.append(mapped_data)
-    return mapped_data_list
+            'arrival_time': arrival_time,
+            'departure_time': departure_time,
+            'no_of_seats': no_of_Seats,
+            'aircraft_type':aircraft_type,
+            'overnight_parking': overnight_parking,  # Default value, will be updated later
+            'service_type_arrival':service_arrival,
+            'service_type_departure': service_departure,
+            'aircraft_regn':aircraft_regn
 
+        })
+         
+        
+        mapped_data_list.append(mapped_data)
+
+    return mapped_data_list
 
 def count_flights_by_hour(flights):
     airline_hourly_counts = {}

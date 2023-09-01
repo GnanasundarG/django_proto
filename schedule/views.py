@@ -46,7 +46,7 @@ def scheduleUpload(request):
 
             # Convert the DataFrame to a list of dictionaries (to use orient='records')
             records = df.to_dict(orient='records')
-            print(records)
+            
             ScheduleRecords = map_excel_data_to_model(records, scheduletypeid)
             for record in ScheduleRecords:
                 airline = Schedules(**record)
@@ -147,7 +147,7 @@ def get_schedules_highlights(request):
 
         airlinesCount = result[0]
         total_schedules = result[1]
-        total_hours = result[2]
+        total_hours = 0 if result[2] == None else result[2]
 
         response_data = {
             'success': True,
@@ -190,6 +190,7 @@ def airline_data_api(request):
     # Extract valid_from and valid_to dates from the URL parameters
     valid_from_str = request.GET.get('valid_from')
     valid_to_str = request.GET.get('valid_to')
+    schedule_type = request.GET.get('schedule_type_id')
 
     # Convert valid_from and valid_to strings to date objects
     valid_from = datetime.strptime(valid_from_str, '%Y-%m-%d').date() if valid_from_str else current_date
@@ -198,11 +199,42 @@ def airline_data_api(request):
     # Create placeholders for the airline_names to use in the SQL query
     # placeholders = ','.join(['%s'] * len(airline_ids))
     condition_query = ''
-    if(airlines_filter_length > 0):
-        condition_query = f"(a.id_airline IN ({','.join(airline_ids)})) AND EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
-    else:
-        condition_query = f"EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
+    # if(airlines_filter_length > 0):
+    #     condition_query = f"(a.id_airline IN ({','.join(airline_ids)})) AND EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
+    # else:
+    #     condition_query = f"EXISTS (SELECT 1 FROM schedules WHERE (arrival_airline_id = a.id_airline OR departure_airline_id = a.id_airline) AND ('{valid_from}' BETWEEN valid_from AND valid_to OR '{valid_to}' BETWEEN valid_from AND valid_to OR valid_from >= '{valid_from}'))"
 
+    # Airline filter condition
+    airline_condition = f"(a.id_airline IN ({','.join(airline_ids)}))"
+
+    # Schedule type filter condition
+    schedule_type_condition = ''
+    
+    if schedule_type is not None and schedule_type != '':
+        schedule_type_condition = f"AND (s.id_schedule_type_id = {schedule_type})"
+
+    # Common schedules subquery condition
+    schedules_subquery_condition = (
+        f"('{valid_from}' BETWEEN valid_from AND valid_to "
+        f"OR '{valid_to}' BETWEEN valid_from AND valid_to "
+        f"OR valid_from >= '{valid_from}')"
+    )
+
+    if airlines_filter_length > 0:
+        condition_query = (
+            f"{airline_condition} AND EXISTS (SELECT 1 FROM schedules s "
+            f"WHERE (s.arrival_airline_id = a.id_airline OR s.departure_airline_id = a.id_airline) "
+            f"AND {schedules_subquery_condition} "
+            f"{schedule_type_condition}) "
+        )
+    else:
+        condition_query = (
+            f"EXISTS (SELECT 1 FROM schedules s "
+            f"WHERE (s.arrival_airline_id = a.id_airline OR s.departure_airline_id = a.id_airline) "
+            f"AND {schedules_subquery_condition} "
+            f"{schedule_type_condition})"
+        )
+    
     with connection.cursor() as cursor:
         query = f"""
             SELECT
@@ -244,14 +276,63 @@ def airline_data_api(request):
             LEFT JOIN schedules s_arrival ON a.id_airline = s_arrival.arrival_airline_id
             LEFT JOIN schedules s_departure ON a.id_airline = s_departure.departure_airline_id
             LEFT JOIN schedules s ON a.id_airline = s.arrival_airline_id OR a.id_airline = s.departure_airline_id
-            WHERE {condition_query}               
+            WHERE {condition_query}
             GROUP BY a.airline_name
         """
+        
+        # query = f"""
+        #     SELECT
+        #         a.airline_name,
+        #         COUNT(DISTINCT CASE WHEN s_arrival.valid_from <= '{valid_from}' AND s_arrival.valid_to >= '{valid_to}' AND 
+        #             CASE {current_day_of_week}
+        #                 WHEN 1 THEN s_arrival.monday_operation
+        #                 WHEN 2 THEN s_arrival.tuesday_operation
+        #                 WHEN 3 THEN s_arrival.wednesday_operation
+        #                 WHEN 4 THEN s_arrival.thursday_operation
+        #                 WHEN 5 THEN s_arrival.friday_operation
+        #                 WHEN 6 THEN s_arrival.saturday_operation
+        #                 WHEN 7 THEN s_arrival.sunday_operation
+        #             END
+        #         THEN s_arrival.id_schedule END) AS arrival_count,
+        #         COUNT(DISTINCT CASE WHEN s_departure.valid_from <= '{valid_from}' AND s_departure.valid_to >= '{valid_to}' AND 
+        #             CASE {current_day_of_week}
+        #                 WHEN 1 THEN s_departure.monday_operation
+        #                 WHEN 2 THEN s_departure.tuesday_operation
+        #                 WHEN 3 THEN s_departure.wednesday_operation
+        #                 WHEN 4 THEN s_departure.thursday_operation
+        #                 WHEN 5 THEN s_departure.friday_operation
+        #                 WHEN 6 THEN s_departure.saturday_operation
+        #                 WHEN 7 THEN s_departure.sunday_operation
+        #             END
+        #         THEN s_departure.id_schedule END) AS departure_count,
+        #         COUNT(DISTINCT CASE WHEN s.valid_from <= '{valid_from}' AND s.valid_to >= '{valid_to}' AND s.overnight_parking AND 
+        #             CASE {current_day_of_week}
+        #                 WHEN 1 THEN s.monday_operation
+        #                 WHEN 2 THEN s.tuesday_operation
+        #                 WHEN 3 THEN s.wednesday_operation
+        #                 WHEN 4 THEN s.thursday_operation
+        #                 WHEN 5 THEN s.friday_operation
+        #                 WHEN 6 THEN s.saturday_operation
+        #                 WHEN 7 THEN s.sunday_operation
+        #             END
+        #         THEN s.id_schedule END) AS overnight_parking_count
+        #     FROM (
+        #         SELECT id_schedule, arrival_airline_id, departure_airline_id
+        #         FROM schedules
+        #         WHERE valid_from <= '{valid_to}' AND valid_to >= '{valid_from}'
+        #     ) AS filtered_schedules
+        #     LEFT JOIN airlines a ON filtered_schedules.arrival_airline_id = a.id_airline OR filtered_schedules.departure_airline_id = a.id_airline
+        #     LEFT JOIN schedules s_arrival ON filtered_schedules.id_schedule = s_arrival.id_schedule
+        #     LEFT JOIN schedules s_departure ON filtered_schedules.id_schedule = s_departure.id_schedule
+        #     LEFT JOIN schedules s ON filtered_schedules.id_schedule = s.arrival_airline_id OR filtered_schedules.id_schedule = s.departure_airline_id
+        #     WHERE {condition_query}
+        #     GROUP BY a.airline_name
+        # """
 
         # Build a list of all arguments required for the query
         cursor.execute(query)
 
-        rows = cursor.fetchall()
+        rows = cursor.fetchall()    
         airlines_data = []
 
         for row in rows:
@@ -2309,7 +2390,8 @@ def airline_paxhandling_report(request):
                 curr_airline_date_range = curr_airline["date_range"]
                 curr_date_count = list(filter(lambda date: date["date"] == curr_date, curr_airline_date_range))
                 if curr_date_count and len(curr_date_count) > 0:
-                    total_count = total_count + curr_date_count[0]['count']
+                    if curr_date_count[0]['count'] is not None and curr_date_count[0]['count'] != '':
+                        total_count = total_count + curr_date_count[0]['count']
                 else:
                     total_count = total_count + 0
 

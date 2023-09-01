@@ -23,11 +23,11 @@ class Stations(models.Model):
         db_table = "stations"
 
 class AircraftType(models.Model):
-    id_aircraft_type = models.IntegerField(primary_key=True)
+    id_aircraft_type = models.AutoField(primary_key=True)
     aircraft_name = models.TextField()
     aircraft_code = models.TextField()
     aircraft_logo = models.TextField(default='')
-    aircraft_type = models.TextField(default='')
+    aircraft_type=models.TextField(default='')
     def __str__(self):
         return self.aircraft_name
     class Meta:
@@ -48,8 +48,8 @@ class Schedules(models.Model):
     id_schedule_type = models.ForeignKey(ScheduleTypes, on_delete=models.CASCADE, related_name='schedule_types')
     arrival_airline = models.ForeignKey(Airlines, on_delete=models.CASCADE, related_name='arrival_schedules')
     departure_airline = models.ForeignKey(Airlines, on_delete=models.CASCADE, related_name='departure_schedules')
-    arrival_flight_no = models.TextField()
-    departure_flight_no = models.TextField()
+    arrival_flight_no = models.IntegerField()
+    departure_flight_no = models.IntegerField()
     valid_from = models.DateField()
     valid_to = models.DateField()
     monday_operation = models.BooleanField()
@@ -70,6 +70,7 @@ class Schedules(models.Model):
     overnight_parking = models.BooleanField(null=True, blank=True)
     service_type_arrival = models.TextField()
     service_type_departure = models.TextField()
+    aircraft_regn= models.TextField(default='')
 
     def __str__(self):
         return f"Schedule {self.id_schedule}"

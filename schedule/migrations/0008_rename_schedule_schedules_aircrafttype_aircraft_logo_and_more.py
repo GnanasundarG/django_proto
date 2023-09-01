@@ -19,6 +19,11 @@ class Migration(migrations.Migration):
             field=models.TextField(default=""),
         ),
         migrations.AddField(
+            model_name="aircrafttype",
+            name="aircraft_type",
+            field=models.TextField(default=""),
+        ),
+        migrations.AddField(
             model_name="airlines",
             name="logo_image",
             field=models.TextField(default=""),
